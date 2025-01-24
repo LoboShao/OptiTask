@@ -1,0 +1,31 @@
+cluster_config:
+  racks:
+    - id: "rack0"
+      name: "simple rack0"
+      machines:
+        - id: "rack0_machine_0"
+          cpu_memory: 512000  # 512GB
+          gpus:
+            - model: "A100_80GB"
+              count: 8
+        - id: "rack0_machine_1"
+          cpu_memory: 256000  # 256GB
+          gpus:
+            - model: "A100_40GB"
+              count: 4
+            - model: "T4"
+              count: 1
+
+    - id: "rack1"
+      name: "simple rack1"
+      machines:
+        - id: "rack1_machine_0"
+          cpu_memory: 1024000  # 1TB
+          gpus:
+            - model: "H100_80GB"
+              count: 8
+        - id: "rack1_machine_1"
+          cpu_memory: 128000   # 128GB
+          gpus:
+            - model: "T4"
+              count: 2
