@@ -27,6 +27,8 @@ def test_single_machine_allocation():
     premium_user.submit_job()
     premium_user.submit_job()
     premium_user.submit_job()
+
+    standard_user.submit_job()
     next_job = cluster.queues[QueueType.HIGH_PRIORITY].get_next_job()
     selected_gpus = cluster.allocate_job(next_job)
     assert next_job.required_gpus == len(selected_gpus)
