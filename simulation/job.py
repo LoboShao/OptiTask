@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Tuple
+from typing import List, Optional, Dict, Tuple, Set
 from enum import Enum
 import numpy as np
 from typing import Optional, List
@@ -34,7 +34,8 @@ class Job:
     status: JobStatus = JobStatus.QUEUED
     allocated_gpus: Optional[List['GPU']] = None
     machine_memory_allocations: Dict[str, int] = field(default_factory=dict)
-    allocated_machines: List['Machine'] = field(default_factory=list)
+    allocated_machines: Set['Machine'] = field(default_factory=set)
+    allocated_racks: Set['Rack'] = field(default_factory=set)
 
 
     def __post_init__(self):
@@ -75,6 +76,24 @@ class Job:
             "episode_per_second": 1/time_per_episode
         }
 
+    def apply_machine_rack_scaling(self):
+        """Apply multi-machine scaling after machine allocation."""
+        num_machines = len(self.allocated_machines)
+        num_racks = len(self.allocated_racks)
+        if num_machines > 1:
+            machine_scaling_efficiency = 0.8 ** (num_machines - 1)  # 80% per extra machine
+            self._training_estimates["bottleneck_time_seconds"] /= machine_scaling_efficiency
+            self._training_estimates["estimated_time_hours"] = self._training_estimates[
+                                                                   "bottleneck_time_seconds"] / 3600
+            self._training_estimates["episode_per_second"] *= machine_scaling_efficiency  # Update episodes per second
+        if num_racks > 1:
+            machine_scaling_efficiency = 0.7 ** (num_racks - 1)  # 80% per extra machine
+            self._training_estimates["bottleneck_time_seconds"] /= machine_scaling_efficiency
+            self._training_estimates["estimated_time_hours"] = self._training_estimates[
+                                                                   "bottleneck_time_seconds"] / 3600
+            self._training_estimates["episode_per_second"] *= machine_scaling_efficiency  # Update episodes per second
+        return self._training_estimates
+
 
     def get_training_estimates(self) -> Dict:
         """Return stored training estimates"""
@@ -86,27 +105,6 @@ class Job:
             return False
         return (current_time - self.start_time) / 3600 > self.max_runtime_hours
 
-    def calculate_distributed_memory(self, num_gpus_on_machine: int, is_cross_rack: bool = False) -> int:
-        """Calculate memory needed when job is distributed
-        Args:
-            num_gpus_on_machine: Number of GPUs allocated on this machine
-            is_cross_rack: Whether this allocation involves cross-rack communication
-        """
-        # Base memory allocation proportional to GPUs on this machine
-        base_memory = (self.cpu_memory_total * num_gpus_on_machine) // self.required_gpus
-
-        # Add communication overhead for distributed training
-        if len(self.allocated_machines) > 0 or num_gpus_on_machine < self.required_gpus:
-            # Base communication overhead
-            communication_overhead = 2048  # 2GB for same-rack communication
-
-            if is_cross_rack:
-                # Additional overhead for cross-rack communication
-                communication_overhead += 1024  # Extra 1GB for cross-rack overhead
-
-            return base_memory + communication_overhead
-
-        return self.cpu_memory_total  # If single machine, use original memory requirement
 
     def step(self, time_interval: float) -> bool:
         """Simulate training progress for one time unit"""

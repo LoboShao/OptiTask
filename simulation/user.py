@@ -78,6 +78,7 @@ def generate_job_params(user_type: UserType, tier: UserTier) -> Dict:
 
 class User:
     def __init__(self,
+                 id: int,
                  cluster: Cluster,
                  user_type: Union[str, UserType],
                  tier: Union[str, UserTier] = UserTier.STANDARD):
@@ -89,18 +90,17 @@ class User:
         if isinstance(tier, str):
             tier = UserTier(tier)
 
+        self.id = id
         self.user_type = user_type
         self.tier = tier
-        self.submitted_jobs = {}
         self.job_id_counter = 0
 
     def submit_job(self, priority_score: float = 0.0):
         """Submit a job with generated parameters based on user type and tier"""
-        job_id = f"job_{self.job_id_counter}"
+        job_id = f"{self.id}-{self.job_id_counter}"
         params = generate_job_params(self.user_type, self.tier)
 
         job = Job(id=job_id, **params)
-        self.submitted_jobs[job_id] = job
         self.job_id_counter += 1
 
         queue_type = self.cluster.select_queue(job)
