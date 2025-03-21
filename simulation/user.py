@@ -1,6 +1,9 @@
 from simulation.cluster import Cluster
 from simulation.job import Job
-from simulation.job_types import JOB_PROFILES
+from simulation.job_profiles import profile_llm, profile_classification, profile_segmentation
+
+from simulation.job_generators import generate_llm_job_params, generate_classification_job_params, generate_segmentation_job_params
+
 from simulation.gpu_model import GPU_MODELS
 from enum import Enum
 from typing import List, Dict, Tuple, Optional, Union
@@ -35,45 +38,111 @@ class UserType(Enum):
     MIXED = "mixed_user"
 
 
-def generate_job_params(user_type: UserType, tier: UserTier) -> Dict:
+def generate_job_params(user_type, tier):
     """Generate job parameters based on user type and tier"""
     available_gpus = TIER_GPU_ACCESS[tier]
     max_gpus = TIER_MAX_GPUS[tier]
 
+    # Determine job type based on user type
     if user_type == UserType.LLM:
         job_type = "llm"
-        batch_size = np.random.choice([8, 16, 32, 64, 256])
         # Filter high-memory GPUs for LLM workloads
-        gpu_options = [gpu for gpu in available_gpus if "80GB" in gpu]
+        gpu_options = [gpu for gpu in available_gpus if "80GB" in gpu or "H100" in gpu]
         if not gpu_options:  # Fallback to available GPUs if no high-memory ones
-            gpu_options = available_gpus
-        gpu_type = np.random.choice(gpu_options)
-        required_gpus = min(np.random.choice([2, 8]), max_gpus)
-
+            gpu_options = [gpu for gpu in available_gpus if "40GB" in gpu or "V100" in gpu]
+            if not gpu_options:  # Further fallback
+                gpu_options = available_gpus
     elif user_type == UserType.CV:
-        job_type = np.random.choice(["classification", "segmentation"])
-        batch_size = np.random.choice([32, 64, 128])
-        gpu_type = np.random.choice(available_gpus)
-        required_gpus = min(np.random.choice([1, 2, 4]), max_gpus)
-
+        job_type = np.random.choice(["classification", "segmentation"], p=[0.6, 0.4])
+        gpu_options = available_gpus
     elif user_type == UserType.MIXED:
-        job_type = np.random.choice(["llm", "classification", "segmentation"])
-        batch_size = np.random.choice([8, 16, 32, 64])
-        gpu_type = np.random.choice(available_gpus)
-        required_gpus = min(np.random.choice([1, 2, 4, 8]), max_gpus)
+        job_type = np.random.choice(["llm", "classification", "segmentation"], p=[0.4, 0.35, 0.25])
+        if job_type == "llm":
+            gpu_options = [gpu for gpu in available_gpus if "80GB" in gpu or "H100" in gpu]
+            if not gpu_options:
+                gpu_options = [gpu for gpu in available_gpus if "40GB" in gpu or "V100" in gpu]
+                if not gpu_options:
+                    gpu_options = available_gpus
+        else:
+            gpu_options = available_gpus
+    else:
+        raise ValueError(f"Unknown user type: {user_type}")
 
-    # Calculate resources using profiles
-    flops, memory_gb = JOB_PROFILES[job_type](batch_size)
-    return {
+    # Select GPU type
+    gpu_type = np.random.choice(gpu_options)
+
+    # Generate job parameters based on job type
+    if job_type == "llm":
+        params = generate_llm_job_params()
+        # Set required GPUs based on model size
+        if params["hidden"] >= 2048 or params["dataset_size"] >= 1_000_000:
+            required_gpus = min(max(2, np.random.choice([2, 4, 8])), max_gpus)
+        else:
+            required_gpus = min(max(1, np.random.choice([1, 2, 4])), max_gpus)
+
+    elif job_type == "classification":
+        params = generate_classification_job_params()
+        # Set required GPUs based on dataset and batch size
+        if params["dataset_size"] >= 100_000 or params["batch_size"] >= 256:
+            required_gpus = min(max(1, np.random.choice([1, 2, 4])), max_gpus)
+        else:
+            required_gpus = min(1, max_gpus)
+
+    elif job_type == "segmentation":
+        params = generate_segmentation_job_params()
+        # Set required GPUs based on image size and batch size
+        if params["image_size"] >= 768 or params["batch_size"] >= 32:
+            required_gpus = min(max(1, np.random.choice([1, 2, 4])), max_gpus)
+        else:
+            required_gpus = min(1, max_gpus)
+
+    # Calculate memory requirements (now we just do a simple approximation)
+    if job_type == "llm":
+        memory_per_param = 16  # bytes per parameter for mixed precision training
+        model_size_params = params["hidden"] * params["hidden"] * params["layers"] * 12  # rough approximation
+        batch_memory = params["batch_size"] * params["seq_len"] * params["hidden"] * 4  # activations
+        total_memory_bytes = (model_size_params * memory_per_param) + batch_memory
+        memory_gb = total_memory_bytes / 1e9
+    elif job_type == "classification":
+        memory_gb = params["batch_size"] * params["image_size"] * params["image_size"] * 3 * 4 / 1e9 * 10
+    else:  # segmentation
+        memory_gb = params["batch_size"] * params["image_size"] * params["image_size"] * 4 * 4 / 1e9 * 15
+
+    # Create the final job parameters dictionary
+    job_params = {
         "job_type": job_type,
-        "batch_size": batch_size,
+        "batch_size": params["batch_size"],
+        "dataset_size": params["dataset_size"],
         "gpu_type": gpu_type,
         "required_gpus": required_gpus,
-        "gpu_memory_per_gpu": int(memory_gb * 1024),  # Convert to MB
-        "cpu_memory_total": int(memory_gb * 1.5 * 1024),  # 1.5x GPU memory in MB
+        "gpu_memory_per_gpu": int(memory_gb * 1024 / required_gpus),  # Memory per GPU in MB
+        "cpu_memory_total": int(memory_gb * 1024 * 1.5),  # 1.5x GPU memory in MB
         "total_episodes": np.random.randint(100, 1000),
         "max_runtime_hours": np.random.uniform(1, 24)
     }
+
+    # Add job type specific parameters
+    if job_type == "llm":
+        job_params.update({
+            "seq_len": params["seq_len"],
+            "hidden": params["hidden"],
+            "layers": params["layers"],
+            "epochs": params["epochs"]
+        })
+    elif job_type == "classification":
+        job_params.update({
+            "image_size": params["image_size"],
+            "initial_channels": params["initial_channels"],
+            "epochs": params["epochs"]
+        })
+    elif job_type == "segmentation":
+        job_params.update({
+            "image_size": params["image_size"],
+            "base_channels": params["base_channels"],
+            "epochs": params["epochs"]
+        })
+
+    return job_params
 
 
 class User:
@@ -98,13 +167,23 @@ class User:
     def submit_job(self, priority_score: float = 0.0):
         """Submit a job with generated parameters based on user type and tier"""
         job_id = f"{self.id}-{self.job_id_counter}"
+
+        # Generate job parameters based on user type and tier
         params = generate_job_params(self.user_type, self.tier)
 
+        # Create the job with the generated parameters
         job = Job(id=job_id, **params)
+
+        # Increment job counter for this user
         self.job_id_counter += 1
 
+        # Determine which queue to use
         queue_type = self.cluster.select_queue(job)
+
+        # Add the job to the selected queue
         self.cluster.queues[queue_type].add_job(job, priority_score)
+
+        return job
 
     @property
     def available_gpus(self) -> List[str]:

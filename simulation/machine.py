@@ -60,28 +60,14 @@ class Machine:
             print('xx'*100)
             return []
         job.allocated_machines.add(self.id)
-
+        self.allocate_cpu_memory(job_id=job.id,
+                                 required_memory=int(job.cpu_memory_total * (num_gpus/job.required_gpus)))
         # Instead of random selection, prioritize GPUs based on physical proximity
         # This can help with better performance for distributed training
         selected_gpus = available_gpus[:num_gpus]  # Take first n available GPUs
         for gpu in selected_gpus:
             gpu.allocate(job.id)
         return selected_gpus
-
-    def has_sufficient_resources(self, required_gpus: int, required_memory: int,
-                                 gpu_type: Optional[str] = None) -> bool:
-        """
-        Check if machine has sufficient resources for a job
-        Args:
-            required_gpus: Number of GPUs required
-            required_memory: Amount of CPU memory required (in MB)
-            gpu_type: Specific GPU model type required. If None, any GPU type is acceptable.
-        Returns:
-            True if machine has sufficient resources, False otherwise
-        """
-        available_matching_gpus = self.count_available_gpus_by_model(gpu_type)
-        return (available_matching_gpus >= required_gpus and
-                self.available_cpu_memory >= required_memory)
 
     def get_gpu_availability_by_model(self) -> Dict[str, int]:
         """
@@ -141,68 +127,12 @@ class Machine:
             "jobs": list(self.cpu_allocations.keys())
         }
 
-if __name__ == '__main__':
-    # Create a machine with 4 GPUs
-    machine = Machine(
-        id="node1",
-        gpus=[
-            GPU(id="gpu_1", model=GPU_MODELS['T4']),
-            GPU(id="gpu_2", model=GPU_MODELS['T4']),
-            GPU(id="gpu_3", model=GPU_MODELS['T4']),
-            GPU(id="gpu_4", model=GPU_MODELS['T4'])
-        ],
-        rack_id="rack1",
-        total_cpu_memory=256_000  # 256GB
-    )
-
-    # Example 1: Successfully allocate resources for a job
-    job_cls = Job(
-        id="job_cls_001",
-        job_type="classification",
-        required_gpus=2,
-        gpu_type="T4",
-        gpu_memory_per_gpu=16_000,
-        cpu_memory_total=64_000,
-        total_episodes=200,
-        batch_size=1024,
-        max_runtime_hours=24.0,
-    )
-
-    # Check if we have enough resources
-    if machine.has_sufficient_resources(job_cls.required_gpus, job_cls.cpu_memory_total):
-        # Try to allocate GPUs
-        allocated_gpus = machine.allocate_gpus(job_cls.required_gpus, job_cls.id)
-        if allocated_gpus and machine.allocate_cpu_memory(job_cls.id, job_cls.cpu_memory_total):
-            print(f"Job {job_cls.id} successfully allocated resources:")
-            print(f"- GPUs: {[gpu.id for gpu in allocated_gpus]}")
-            print(f"- CPU Memory: {job_cls.cpu_memory_total / 1000}GB")
-        else:
-            # If CPU allocation failed, release any allocated GPUs
-            for gpu in allocated_gpus:
-                gpu.release()
-            print("Resource allocation failed")
-    print(machine.get_resource_usage())
-
-    # Example 3: Try to allocate more resources than available
-    job_llm = Job(
-        id="job_llm_001",
-        job_type="llm",
-        required_gpus=4,
-        gpu_type="A100_80GB",
-        gpu_memory_per_gpu=40_000,
-        cpu_memory_total=256_000,
-        total_episodes=100,
-        batch_size=256,
-        max_runtime_hours=48.0,
-    )
-
-    if machine.has_sufficient_resources(job_llm.required_gpus, job_llm.cpu_memory_total):
-        print("\nCan allocate job 2")
-    else:
-        print("\nInsufficient resources for job 2")
-        print(f"Available GPUs: {len(machine.available_gpus)}")
-        print(f"Available CPU Memory: {machine.available_cpu_memory / 1000}GB")
-
-    # Example 4: Release resources
-    machine.release_resources(job_llm.id)
-    print(machine.get_resource_usage())
+    def has_gpu_type(self, gpu_type: str) -> bool:
+        """
+        Check if machine has any GPUs of the specified type.
+        Args:
+            gpu_type: Type of GPU to check for (e.g., "A100_80GB")
+        Returns:
+            True if machine has at least one GPU of specified type
+        """
+        return any(gpu.model.name == gpu_type for gpu in self.gpus)

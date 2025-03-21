@@ -5,7 +5,8 @@ import numpy as np
 from typing import Optional, List
 
 from simulation.gpu import GPU, GPU_MODELS
-from simulation.job_types import JOB_PROFILES
+from simulation.job_profiles import profile_llm, profile_classification, profile_segmentation
+
 
 import time
 
@@ -14,6 +15,31 @@ class JobStatus(Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+
+JOB_PROFILES = {
+    "llm": lambda batch_size, dataset_size, **kwargs: profile_llm(
+        batch_size=batch_size,
+        dataset_size=dataset_size,
+        epochs=kwargs.get('epochs', 3),
+        seq_len=kwargs.get('seq_len', 512),
+        hidden=kwargs.get('hidden', 1024),
+        layers=kwargs.get('layers', 12)
+    ),
+    "classification": lambda batch_size, dataset_size, **kwargs: profile_classification(
+        batch_size=batch_size,
+        dataset_size=dataset_size,
+        epochs=kwargs.get('epochs', 100),
+        image_size=kwargs.get('image_size', 224),
+        initial_channels=kwargs.get('initial_channels', 64)
+    ),
+    "segmentation": lambda batch_size, dataset_size, **kwargs: profile_segmentation(
+        batch_size=batch_size,
+        dataset_size=dataset_size,
+        epochs=kwargs.get('epochs', 100),
+        image_size=kwargs.get('image_size', 512),
+        base_channels=kwargs.get('base_channels', 64)
+    )
+}
 
 
 @dataclass
@@ -26,7 +52,18 @@ class Job:
     cpu_memory_total: int  # This will be the memory needed if run on single machine
     total_episodes: int
     batch_size: int
+    dataset_size: int
     max_runtime_hours: float
+
+    # Job type specific parameters with defaults
+    epochs: int = 3
+    seq_len: int = 512
+    hidden: int = 1024
+    layers: int = 12
+    image_size: int = 224
+    initial_channels: int = 64
+    base_channels: int = 64
+
     current_episode: int = 0
     progress: float = 0.0
     start_time: Optional[float] = None  # Track when job started running
@@ -34,22 +71,32 @@ class Job:
     status: JobStatus = JobStatus.QUEUED
     allocated_gpus: Optional[List['GPU']] = None
     machine_memory_allocations: Dict[str, int] = field(default_factory=dict)
-    allocated_machines: Set['Machine'] = field(default_factory=set)
-    allocated_racks: Set['Rack'] = field(default_factory=set)
-
+    allocated_machines: Set[str] = field(default_factory=set)
+    allocated_racks: Set[str] = field(default_factory=set)
+    _training_estimates: Dict = field(default_factory=dict)
 
     def __post_init__(self):
         gpu_spec = GPU_MODELS[self.gpu_type]
 
+        # Create kwargs dict with job-specific parameters
+        kwargs = {
+            'epochs': self.epochs,
+            'seq_len': self.seq_len,
+            'hidden': self.hidden,
+            'layers': self.layers,
+            'image_size': self.image_size,
+            'initial_channels': self.initial_channels,
+            'base_channels': self.base_channels
+        }
+
         # Get the function for this job_type, or default if not found
         profile_fn = JOB_PROFILES.get(
             self.job_type,
-            lambda b: (1e9 * b, 1.0 * b)  # default fallback
+            lambda batch_size, dataset_size, **kwargs: (1e9 * batch_size, 1.0 * batch_size)  # default fallback
         )
 
-        # Call the profile function
-        flops_per_episode, data_per_episode_gb = profile_fn(self.batch_size)
-
+        # Call the profile function with job-specific parameters
+        flops_per_episode, data_per_episode_gb = profile_fn(self.batch_size, self.dataset_size, **kwargs)
         # 1) Compute-limited time
         compute_time_per_episode = flops_per_episode / gpu_spec.peak_ops
         total_compute_time = compute_time_per_episode * self.total_episodes
@@ -67,13 +114,14 @@ class Job:
             scaling_efficiency = 0.9 ** (self.required_gpus - 1)
             # Invert because more GPUs -> less time
             estimated_time_seconds *= 1.0 / scaling_efficiency
+
         # Store training estimates
         self._training_estimates = {
             "compute_time_seconds": total_compute_time,
             "memory_time_seconds": total_memory_time,
             "bottleneck_time_seconds": estimated_time_seconds,
             "estimated_time_hours": estimated_time_seconds / 3600,
-            "episode_per_second": 1/time_per_episode
+            "episode_per_second": 1 / time_per_episode
         }
 
     def apply_machine_rack_scaling(self):
@@ -87,13 +135,12 @@ class Job:
                                                                    "bottleneck_time_seconds"] / 3600
             self._training_estimates["episode_per_second"] *= machine_scaling_efficiency  # Update episodes per second
         if num_racks > 1:
-            machine_scaling_efficiency = 0.7 ** (num_racks - 1)  # 80% per extra machine
+            machine_scaling_efficiency = 0.7 ** (num_racks - 1)  # 70% per extra rack
             self._training_estimates["bottleneck_time_seconds"] /= machine_scaling_efficiency
             self._training_estimates["estimated_time_hours"] = self._training_estimates[
                                                                    "bottleneck_time_seconds"] / 3600
             self._training_estimates["episode_per_second"] *= machine_scaling_efficiency  # Update episodes per second
         return self._training_estimates
-
 
     def get_training_estimates(self) -> Dict:
         """Return stored training estimates"""
@@ -105,22 +152,20 @@ class Job:
             return False
         return (current_time - self.start_time) / 3600 > self.max_runtime_hours
 
-
     def step(self, time_interval: float) -> bool:
         """Simulate training progress for one time unit"""
         if self.status != JobStatus.RUNNING:
             return False
-        current_progress  = time_interval * self._training_estimates["episode_per_second"]
+        current_progress = time_interval * self._training_estimates["episode_per_second"]
         current_progress *= np.random.uniform(0.9, 1.1)  # Add ±10% random variation
 
         self.current_episode += current_progress
-        self.progress = self.current_episode/self.total_episodes
+        self.progress = self.current_episode / self.total_episodes
         if self.current_episode >= self.total_episodes:
             self.status = JobStatus.COMPLETED
             return True
 
         return False
-
 
 
 if __name__ == "__main__":

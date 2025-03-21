@@ -69,20 +69,22 @@ def estimate_training_time(job: TrainingJob, gpu: GPUModel) -> dict:
     }
 
 
-# Example usage:
-job = TrainingJob(
-    model_size_gb=10,  # 10GB model
-    batch_size=32,
-    total_samples=1000000,
-    precision="fp16"
-)
+if __name__ == '__main__':
 
-# Estimate for different GPUs
-for gpu_name, gpu_model in GPU_MODELS.items():
-    print(f"\nEstimating for {gpu_name}:")
-    estimate = estimate_training_time(job, gpu_model)
-    for key, value in estimate.items():
-        if isinstance(value, float):
-            print(f"{key}: {value:.2f}")
-        else:
-            print(f"{key}: {value}")
+    # Example usage:
+    job = TrainingJob(
+        model_size_gb=10,  # 10GB model
+        batch_size=32,
+        total_samples=1000000,
+        precision="fp16"
+    )
+
+    # Estimate for different GPUs
+    for gpu_name, gpu_model in GPU_MODELS.items():
+        print(f"\nEstimating for {gpu_name}:")
+        estimate = estimate_training_time(job, gpu_model)
+        for key, value in estimate.items():
+            if isinstance(value, float):
+                print(f"{key}: {value:.2f}")
+            else:
+                print(f"{key}: {value}")
