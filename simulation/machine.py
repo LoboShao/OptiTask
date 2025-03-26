@@ -3,6 +3,8 @@ from typing import List, Optional, Dict, Tuple
 from simulation.gpu import GPU, GPUStatus, GPU_MODELS
 from simulation.job import Job
 
+import logging
+
 
 @dataclass
 class Machine:
@@ -30,10 +32,9 @@ class Machine:
         Returns:
             List of available GPUs matching the specified model
         """
-        available = self.available_gpus
         if model_name is None:
-            return available
-        return [gpu for gpu in available if gpu.model.name == model_name]
+            return self.available_gpus
+        return [gpu for gpu in self.available_gpus if gpu.model.name == model_name]
 
     def count_available_gpus_by_model(self, model_name: Optional[str] = None) -> int:
         """
@@ -45,26 +46,39 @@ class Machine:
         """
         return len(self.available_gpus_by_model(model_name))
 
+    # def allocate_gpus(self, num_gpus: int, job: Job, model_name: GPU_MODELS) -> List[GPU]:
+    #     """
+    #     Allocate GPUs of specific model if specified
+    #     Args:
+    #         num_gpus: Number of GPUs to allocate
+    #         job: Training job
+    #         model_name: Specific GPU model type required. If None, any GPU type can be allocated.
+    #     Returns:
+    #         List of allocated GPUs, empty list if allocation failed
+    #     """
+    #     available_gpus = self.available_gpus_by_model(model_name)
+    #     if len(available_gpus) < num_gpus:
+    #         print('xx'*100)
+    #         return []
+    #     job.allocated_machines.add(self.id)
+    #     self.allocate_cpu_memory(job_id=job.id,
+    #                              required_memory=int(job.cpu_memory_total * (num_gpus/job.required_gpus)))
+    #     # Instead of random selection, prioritize GPUs based on physical proximity
+    #     # This can help with better performance for distributed training
+    #     selected_gpus = available_gpus[:num_gpus]  # Take first n available GPUs
+    #     for gpu in selected_gpus:
+    #         gpu.allocate(job.id)
+    #     return selected_gpus
     def allocate_gpus(self, num_gpus: int, job: Job, model_name: GPU_MODELS) -> List[GPU]:
-        """
-        Allocate GPUs of specific model if specified
-        Args:
-            num_gpus: Number of GPUs to allocate
-            job: Training job
-            model_name: Specific GPU model type required. If None, any GPU type can be allocated.
-        Returns:
-            List of allocated GPUs, empty list if allocation failed
-        """
         available_gpus = self.available_gpus_by_model(model_name)
         if len(available_gpus) < num_gpus:
-            print('xx'*100)
+            # Log a warning or raise an exception
+            logging.warning(f"Machine {self.id} does not have enough GPUs for job {job.id}")
             return []
         job.allocated_machines.add(self.id)
         self.allocate_cpu_memory(job_id=job.id,
-                                 required_memory=int(job.cpu_memory_total * (num_gpus/job.required_gpus)))
-        # Instead of random selection, prioritize GPUs based on physical proximity
-        # This can help with better performance for distributed training
-        selected_gpus = available_gpus[:num_gpus]  # Take first n available GPUs
+                                 required_memory=int(job.cpu_memory_total * (num_gpus / job.required_gpus)))
+        selected_gpus = available_gpus[:num_gpus]
         for gpu in selected_gpus:
             gpu.allocate(job.id)
         return selected_gpus

@@ -46,12 +46,6 @@ class JobQueue:
 class Cluster:
     def __init__(self, racks: List[Rack]):
         self.racks = racks
-        self.machine_map = {
-            machine.id: machine
-            for rack in self.racks
-            for machine in rack.machines
-        }
-        self.rack_map = {rack.id: rack for rack in self.racks}
         self.queues = {
             QueueType.HIGH_PRIORITY: JobQueue(QueueType.HIGH_PRIORITY),
             QueueType.STANDARD: JobQueue(QueueType.STANDARD),
@@ -76,7 +70,7 @@ class Cluster:
         """Add a job to running jobs"""
         self.running_jobs[job.id] = job
 
-    def print_queue_status(self):
+    def print_cluster_status(self):
         """
         Print and return detailed status of all job queues
         Returns:
@@ -102,7 +96,7 @@ class Cluster:
                 for priority_score, job in jobs:
                     gpu_type = job.gpu_type or "Any"
                     print(f"{job.id:<15} {priority_score:<10.2f} {job.required_gpus:<6} "
-                          f"{job.gpu_memory_per_gpu:<12} {gpu_type:<10}")
+                          f"{job.cpu_memory_total:<12} {gpu_type:<10}")
             else:
                 print("No jobs in queue")
 
@@ -111,13 +105,20 @@ class Cluster:
         print(f"Total running jobs: {len(self.running_jobs)}")
         if self.running_jobs:
             print("\nCurrently running jobs:")
-            print(f"{'Job ID':<15} {'GPUs':<6} {'Memory (MB)':<12} {'GPU Type':<10}")
-            print("-" * 45)
+            print(f"{'Job ID':<15} {'GPUs':<6} {'Memory (MB)':<12} {'GPU Type':<10} {'On Machine':<10}")
+            print("-" * 57)
             for job_id, job in self.running_jobs.items():
                 gpu_type = job.gpu_type or "Any"
                 print(f"{job_id:<15} {job.required_gpus:<6} "
-                      f"{job.gpu_memory_per_gpu:<12} {gpu_type:<10}")
-
+                      f"{job.cpu_memory_total:<12} {gpu_type:<10} {job.allocated_machines}")
+        print("\n=== Cluster Status ===")
+        print(f"{'Rack ID':<15} {'Machine ID':<20} {'Memory (MB)':<20} {'Number of GPUs':<10}")
+        print("-" *65)
+        for rack in self.racks:
+            for machine in rack.machines:
+                print(f"{machine.rack_id:<15} {machine.id:<20} {(str(machine.available_cpu_memory) + '/' + str(machine.total_cpu_memory)):<20} "
+                      f"{(str(len(machine.available_gpus)) + '/' + str(len(machine.gpus))):<10}"
+                      )
 
     # ------------------------ Job GPU Assignment Functions ------------------------------ #
     def schedule_next_job(self) -> Optional[Job]:
@@ -143,33 +144,60 @@ class Cluster:
         return None
 
 
+    # def allocate_job(self, job: Job) -> List[GPU]:
+    #     gpu_model = job.gpu_type
+    #     required_count = job.required_gpus
+    #     cpu_memory = job.cpu_memory_total
+    #     rack = self._find_rack_with_gpus(required_count, cpu_memory, gpu_model)
+    #     if rack:
+    #         return rack.allocate_gpus(num_gpus=required_count, job=job, model_name=gpu_model)
+    #     else:
+    #         return self._allocate_across_racks(num_gpus=required_count, job=job, model_name=gpu_model)
     def allocate_job(self, job: Job) -> List[GPU]:
         gpu_model = job.gpu_type
         required_count = job.required_gpus
         cpu_memory = job.cpu_memory_total
+
+        # 1. Try to allocate within a single machine
+        machine = self._find_machine_with_gpus(required_count, cpu_memory, gpu_model)
+        if machine:
+            return machine.allocate_gpus(num_gpus=required_count, job=job, model_name=gpu_model)
+        # 2. Try to allocate within one rack
         rack = self._find_rack_with_gpus(required_count, cpu_memory, gpu_model)
         if rack:
             return rack.allocate_gpus(num_gpus=required_count, job=job, model_name=gpu_model)
-        else:
-            return self._allocate_across_racks(num_gpus=required_count, job=job, model_name=gpu_model)
+
+        # 3. Allocate across multiple racks
+        return self._allocate_across_racks(num_gpus=required_count, job=job, model_name=gpu_model)
+
+    def _find_machine_with_gpus(self, required_count: int, required_memory: int, gpu_model: GPU_MODELS) -> Optional[
+        Machine]:
+        for rack in self.racks:
+            for machine in rack.machines:
+                if machine.count_available_gpus_by_model(
+                        gpu_model) >= required_count and machine.available_cpu_memory >= required_memory:
+                    return machine
+        return None
 
 
-    def _find_rack_with_gpus(self, required_count: int, required_memory: int, gpu_model: GPU_MODELS) -> Union[Rack, None]:
-        racks_with_counts = [
-            (rack_id, rack.count_available_gpus_by_model(model_name=gpu_model), rack.count_avalible_memory())
-            for rack_id, rack in self.rack_map.items()  # Use items() to get both key and value
-        ]
-        valid_racks = [(rack, count, memory) for rack, count, memory in racks_with_counts if count >= required_count and memory >= required_memory]
+    def _find_rack_with_gpus(self, required_count: int, required_memory: int, gpu_model: GPU_MODELS) -> Optional[Rack]:
+        valid_racks = []
+        for rack in self.racks:
+            gpu_count = rack.count_available_gpus_by_model(model_name=gpu_model)
+            mem = rack.count_avalible_memory()
+            if gpu_count >= required_count and mem >= required_memory:
+                valid_racks.append((rack, gpu_count))
         if not valid_racks:
             return None
-        else:
-            index = max(valid_racks, key=lambda x: x[1])[0]
-            return self.rack_map[index]
+        # Choose the rack with the highest GPU availability (or apply other criteria)
+        selected_rack = max(valid_racks, key=lambda x: x[1])[0]
+        return selected_rack
+
 
     def _allocate_across_racks(self, num_gpus: int, job: Job, model_name: GPU_MODELS) -> List[GPU]:
         racks_with_counts = [rack.count_available_gpus_by_model(model_name) for rack in self.racks]
-        print(racks_with_counts)
         selected_gpus = []
+        print('triggered')
         if sum(racks_with_counts) < num_gpus:
             print('invalid racks')
             return selected_gpus
@@ -184,13 +212,6 @@ class Cluster:
                         selected_gpus.extend(self.racks[idx].allocate_gpus(num_gpus=rest, job=job, model_name=model_name))
             return selected_gpus
 
-    # def can_schedule_job(self, job: Job) -> bool:
-    #     # Quick check if job can possibly be scheduled
-    #     available_gpus = sum(
-    #         rack.count_available_gpus_by_model(job.gpu_type)
-    #         for rack in self.racks
-    #     )
-    #     return available_gpus >= job.required_gpus
 
     def can_schedule_job(self, job: Job) -> bool:
         gpu_count = 0

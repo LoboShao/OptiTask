@@ -22,10 +22,30 @@ def test_single_machine_allocation():
     premium_user.submit_job()
     premium_user.submit_job()
     premium_user.submit_job()
+
+    premium_user.submit_job()
+    premium_user.submit_job()
     premium_user.submit_job()
     premium_user.submit_job()
     premium_user.submit_job()
 
+    premium_user.submit_job()
+    premium_user.submit_job()
+    premium_user.submit_job()
+    premium_user.submit_job()
+    premium_user.submit_job()
+
+    cluster.schedule_next_job()
+    cluster.schedule_next_job()
+    cluster.schedule_next_job()
+    cluster.schedule_next_job()
+    cluster.schedule_next_job()
+
+    cluster.schedule_next_job()
+    cluster.schedule_next_job()
+    cluster.schedule_next_job()
+    cluster.schedule_next_job()
+    cluster.schedule_next_job()
 
     cluster.schedule_next_job()
     cluster.schedule_next_job()
@@ -33,12 +53,7 @@ def test_single_machine_allocation():
     cluster.schedule_next_job()
     cluster.schedule_next_job()
     cluster.schedule_next_job()
-    cluster.schedule_next_job()
-    cluster.schedule_next_job()
-    cluster.schedule_next_job()
-    cluster.schedule_next_job()
-
-    cluster.print_queue_status()
+    cluster.print_cluster_status()
 
 
 if __name__ == '__main__':
