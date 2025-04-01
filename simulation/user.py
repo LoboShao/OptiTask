@@ -1,6 +1,5 @@
 from simulation.cluster import Cluster
 from simulation.job import Job
-from simulation.job_profiles import profile_llm, profile_classification, profile_segmentation
 
 from simulation.job_generators import generate_llm_job_params, generate_classification_job_params, generate_segmentation_job_params
 
